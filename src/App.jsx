@@ -2,8 +2,9 @@ import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
 import {
   getAuth, onAuthStateChanged, createUserWithEmailAndPassword,
-  signInWithEmailAndPassword, signInWithPopup, GoogleAuthProvider,
-  signOut, updateProfile, sendPasswordResetEmail
+  signInWithEmailAndPassword, signInWithPopup, signInWithRedirect,
+  getRedirectResult, GoogleAuthProvider, signOut, updateProfile,
+  sendPasswordResetEmail
 } from "firebase/auth";
 import {
   getFirestore, collection, addDoc, onSnapshot,
@@ -29,6 +30,8 @@ const CATEGORIAS = ["Moradia","Alimentação","Transporte","Saúde","Lazer","Out
 const LIMITES = { Alimentação:1500, Transporte:800, Lazer:600, Saúde:500, Moradia:3000, Outros:300 };
 const CORES = ["#4d9fff","#00e5a0","#f5a623","#ff4f6a","#b57bee","#7a8490","#5dcaa5"];
 const ICONES = { Moradia:"🏠", Alimentação:"🛒", Transporte:"🚗", Saúde:"💊", Lazer:"🎭", Receita:"💰", Outros:"📦" };
+
+const isMobile = () => /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.innerWidth < 768;
 
 async function callGroq(key, systemPrompt, userMessage) {
   try {
@@ -74,23 +77,20 @@ function calcDados(transacoes) {
   return { receita, despesa, saldo, poupanca, porCategoria, chartData:Object.values(porMes).slice(-6) };
 }
 
-// ─── RESPONSIVE STYLES ───────────────────────────────────────
-const mobile = typeof window !== "undefined" && window.innerWidth < 768;
-
 const css = {
   page: { minHeight:"100vh", background:"#080b0e", color:"#e8eaed", fontFamily:"'DM Sans',system-ui,sans-serif" },
   center: { minHeight:"100vh", background:"#080b0e", display:"flex", alignItems:"center", justifyContent:"center", padding:20, fontFamily:"'DM Sans',system-ui,sans-serif" },
-  authCard: { background:"#111518", border:"1px solid rgba(255,255,255,0.08)", borderRadius:16, padding:mobile?24:36, width:"100%", maxWidth:400 },
-  nav: { padding:mobile?"0 16px":"0 28px", height:56, display:"flex", alignItems:"center", justifyContent:"space-between", borderBottom:"1px solid rgba(255,255,255,0.06)", background:"rgba(8,11,14,0.92)", backdropFilter:"blur(12px)", position:"sticky", top:0, zIndex:100 },
-  main: { padding:mobile?"16px":"24px 28px", display:"flex", flexDirection:"column", gap:mobile?14:20 },
-  grid4: { display:"grid", gridTemplateColumns:mobile?"repeat(2,1fr)":"repeat(4,1fr)", gap:mobile?10:14 },
-  grid2: { display:"grid", gridTemplateColumns:mobile?"1fr":"1fr 1fr", gap:mobile?10:14 },
-  gridDash: { display:"grid", gridTemplateColumns:mobile?"1fr":"1fr 360px", gap:mobile?10:14 },
-  kpi: c => ({ background:"#111518", border:"1px solid rgba(255,255,255,0.06)", borderTop:`2px solid ${c}`, borderRadius:12, padding:mobile?"14px":"18px 20px" }),
-  panel: { background:"#111518", border:"1px solid rgba(255,255,255,0.06)", borderRadius:12, padding:mobile?14:20 },
-  sidebar: { background:"#111518", border:"1px solid rgba(255,255,255,0.06)", borderRadius:12, display:"flex", flexDirection:"column", minHeight:mobile?400:520 },
-  tab: a => ({ padding:mobile?"5px 10px":"6px 14px", borderRadius:6, border:"none", cursor:"pointer", fontSize:mobile?11:12, fontWeight:500, background:a?"rgba(0,229,160,0.1)":"transparent", color:a?"#00e5a0":"#7a8490" }),
-  btn: { background:"#00e5a0", color:"#080b0e", border:"none", borderRadius:8, padding:"11px 24px", fontSize:13, fontWeight:700, cursor:"pointer", width:"100%" },
+  authCard: { background:"#111518", border:"1px solid rgba(255,255,255,0.08)", borderRadius:16, padding:28, width:"100%", maxWidth:400 },
+  nav: { padding:"0 16px", height:56, display:"flex", alignItems:"center", justifyContent:"space-between", borderBottom:"1px solid rgba(255,255,255,0.06)", background:"rgba(8,11,14,0.92)", backdropFilter:"blur(12px)", position:"sticky", top:0, zIndex:100 },
+  main: { padding:"16px", display:"flex", flexDirection:"column", gap:14 },
+  grid4: { display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:10 },
+  grid2: (mob) => ({ display:"grid", gridTemplateColumns:mob?"1fr":"1fr 1fr", gap:mob?10:14 }),
+  gridDash: (mob) => ({ display:"grid", gridTemplateColumns:mob?"1fr":"1fr 360px", gap:mob?10:14 }),
+  kpi: c => ({ background:"#111518", border:"1px solid rgba(255,255,255,0.06)", borderTop:`2px solid ${c}`, borderRadius:12, padding:"14px" }),
+  panel: { background:"#111518", border:"1px solid rgba(255,255,255,0.06)", borderRadius:12, padding:16 },
+  sidebar: { background:"#111518", border:"1px solid rgba(255,255,255,0.06)", borderRadius:12, display:"flex", flexDirection:"column" },
+  tab: a => ({ padding:"6px 14px", borderRadius:6, border:"none", cursor:"pointer", fontSize:12, fontWeight:500, background:a?"rgba(0,229,160,0.1)":"transparent", color:a?"#00e5a0":"#7a8490" }),
+  btn: { background:"#00e5a0", color:"#080b0e", border:"none", borderRadius:8, padding:"12px 24px", fontSize:13, fontWeight:700, cursor:"pointer", width:"100%" },
   btnGoogle: { width:"100%", background:"transparent", color:"#e8eaed", border:"1px solid rgba(255,255,255,0.12)", borderRadius:8, padding:"11px", fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:8, marginBottom:16 },
   input: { width:"100%", background:"#181d22", border:"1px solid rgba(255,255,255,0.08)", borderRadius:8, padding:"11px 14px", color:"#e8eaed", fontSize:13, outline:"none", boxSizing:"border-box", marginBottom:12 },
   fieldInput: { width:"100%", background:"#181d22", border:"1px solid rgba(255,255,255,0.08)", borderRadius:8, padding:"9px 12px", color:"#e8eaed", fontSize:13, outline:"none", boxSizing:"border-box" },
@@ -108,7 +108,7 @@ const css = {
 
 // ─── AUTH PAGE ────────────────────────────────────────────────
 function AuthPage() {
-  const [mode, setMode] = useState("login"); // login | cadastro | esqueci
+  const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
   const [senha, setSenha] = useState("");
   const [nome, setNome] = useState("");
@@ -143,9 +143,13 @@ function AuthPage() {
 
   const handleGoogle = async () => {
     setLoading(true); setErro(""); setSucesso("");
-    try { await signInWithPopup(auth, googleProvider); }
-    catch (e) { setErro(errMsg(e.code)); }
-    setLoading(false);
+    try {
+      if (isMobile()) {
+        await signInWithRedirect(auth, googleProvider);
+      } else {
+        await signInWithPopup(auth, googleProvider);
+      }
+    } catch (e) { setErro(errMsg(e.code)); setLoading(false); }
   };
 
   const handleEsqueci = async () => {
@@ -153,7 +157,7 @@ function AuthPage() {
     setLoading(true); setErro(""); setSucesso("");
     try {
       await sendPasswordResetEmail(auth, email);
-      setSucesso("Email de redefinição enviado! Verifique sua caixa de entrada.");
+      setSucesso("Email enviado! Verifique sua caixa de entrada.");
     } catch (e) { setErro(errMsg(e.code)); }
     setLoading(false);
   };
@@ -174,18 +178,17 @@ function AuthPage() {
         </div>
 
         {mode !== "esqueci" && (
-          <button style={css.btnGoogle} onClick={handleGoogle} disabled={loading}>
-            <svg width="16" height="16" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
-            Continuar com Google
-          </button>
-        )}
-
-        {mode !== "esqueci" && (
-          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:16 }}>
-            <div style={{ flex:1, height:1, background:"rgba(255,255,255,0.06)" }}/>
-            <span style={{ fontSize:11, color:"#4a5260", fontFamily:"monospace" }}>ou</span>
-            <div style={{ flex:1, height:1, background:"rgba(255,255,255,0.06)" }}/>
-          </div>
+          <>
+            <button style={css.btnGoogle} onClick={handleGoogle} disabled={loading}>
+              <svg width="16" height="16" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+              Continuar com Google
+            </button>
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:16 }}>
+              <div style={{ flex:1, height:1, background:"rgba(255,255,255,0.06)" }}/>
+              <span style={{ fontSize:11, color:"#4a5260", fontFamily:"monospace" }}>ou</span>
+              <div style={{ flex:1, height:1, background:"rgba(255,255,255,0.06)" }}/>
+            </div>
+          </>
         )}
 
         {erro && <div style={css.err}>{erro}</div>}
@@ -213,7 +216,7 @@ function AuthPage() {
         )}
 
         <button style={{ ...css.btn, opacity:loading?0.6:1, marginBottom:16 }} onClick={mode==="esqueci"?handleEsqueci:handleEmail} disabled={loading}>
-          {loading?"Aguarde...":mode==="login"?"Entrar":mode==="cadastro"?"Criar conta":"Enviar email de redefinição"}
+          {loading?"Aguarde...":mode==="login"?"Entrar":mode==="cadastro"?"Criar conta":"Enviar link de redefinição"}
         </button>
 
         <div style={{ fontSize:12, color:"#7a8490", textAlign:"center" }}>
@@ -236,16 +239,16 @@ function AuthPage() {
 }
 
 // ─── DASHBOARD ────────────────────────────────────────────────
-function DashboardPage({ transacoes, groqKey }) {
+function DashboardPage({ transacoes, groqKey, mob }) {
   const { receita, despesa, saldo, poupanca, porCategoria, chartData } = calcDados(transacoes);
   const [msgs, setMsgs] = useState([{
     role:"ai",
-    text:"Olá! Sou sua consultora financeira 💼\n\nPosso ajudar com planejamento de metas, investimentos, corte de gastos e muito mais!",
-    chips:["Quero guardar R$30k para um carro","Como investir meu saldo?","Onde posso cortar gastos?","Minha saúde financeira está boa?"]
+    text:"Olá! Sou sua consultora financeira 💼\n\nPosso ajudar com metas, investimentos e corte de gastos!",
+    chips:["Quero guardar R$30k para um carro","Como investir meu saldo?","Onde cortar gastos?","Saúde financeira"]
   }]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [chatAberto, setChatAberto] = useState(!mobile);
+  const [chatAberto, setChatAberto] = useState(!mob);
   const chatRef = useRef(null);
 
   useEffect(()=>{ if(chatRef.current) chatRef.current.scrollTop=chatRef.current.scrollHeight; },[msgs]);
@@ -253,7 +256,7 @@ function DashboardPage({ transacoes, groqKey }) {
   const systemPrompt = `Você é consultora financeira do FININTELL. Dados do usuário:
 - Receita: ${fmt(receita)} | Despesas: ${fmt(despesa)} | Saldo: ${fmt(saldo)} | Poupança: ${poupanca}%
 - Categorias: ${porCategoria.map(c=>`${c.name} ${fmt(c.value)}`).join(", ")||"Sem dados"}
-Responda em pt-BR, máx 6 linhas, use os dados reais nos cálculos. Seja direta e prática.`;
+Responda em pt-BR, máx 6 linhas, use dados reais, seja direta e prática.`;
 
   const send = async (text) => {
     if(!text||!text.trim()||loading) return;
@@ -265,7 +268,7 @@ Responda em pt-BR, máx 6 linhas, use os dados reais nos cálculos. Seja direta 
   };
 
   return (
-    <div style={{display:"flex",flexDirection:"column",gap:mobile?14:20}}>
+    <div style={{display:"flex",flexDirection:"column",gap:14}}>
       <div style={css.grid4}>
         {[
           {label:"RECEITA",value:fmt(receita),color:"#00e5a0"},
@@ -275,13 +278,13 @@ Responda em pt-BR, máx 6 linhas, use os dados reais nos cálculos. Seja direta 
         ].map(k=>(
           <div key={k.label} style={css.kpi(k.color)}>
             <div style={{fontFamily:"monospace",fontSize:9,color:"#4a5260",letterSpacing:"0.1em",marginBottom:6}}>{k.label}</div>
-            <div style={{fontSize:mobile?20:24,fontWeight:800,color:k.color,letterSpacing:"-0.02em"}}>{k.value}</div>
+            <div style={{fontSize:mob?18:22,fontWeight:800,color:k.color,letterSpacing:"-0.02em"}}>{k.value}</div>
           </div>
         ))}
       </div>
 
-      {!mobile && (
-        <div style={css.grid2}>
+      {!mob ? (
+        <div style={css.grid2(false)}>
           <div style={css.panel}>
             <div style={{fontSize:13,fontWeight:600,marginBottom:4}}>Receitas × Despesas</div>
             <div style={{fontSize:10,color:"#4a5260",fontFamily:"monospace",marginBottom:16}}>POR MÊS</div>
@@ -308,11 +311,10 @@ Responda em pt-BR, máx 6 linhas, use os dados reais nos cálculos. Seja direta 
             </ResponsiveContainer>
           </div>
         </div>
-      )}
-
-      {mobile && (
+      ) : (
         <div style={css.panel}>
           <div style={{fontSize:13,fontWeight:600,marginBottom:12}}>Gastos por categoria</div>
+          {porCategoria.length===0 && <div style={{fontSize:12,color:"#4a5260"}}>Nenhum gasto registrado ainda.</div>}
           {porCategoria.map((c,i)=>(
             <div key={c.name} style={{marginBottom:10}}>
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
@@ -329,10 +331,10 @@ Responda em pt-BR, máx 6 linhas, use os dados reais nos cálculos. Seja direta 
 
       <div style={css.panel}>
         <div style={{fontSize:13,fontWeight:600,marginBottom:2}}>Últimas transações</div>
-        <div style={{fontSize:10,color:"#4a5260",fontFamily:"monospace",marginBottom:14}}>FIREBASE · TEMPO REAL</div>
-        {transacoes.length===0&&<div style={{fontSize:13,color:"#4a5260",padding:"16px 0"}}>Nenhum lançamento ainda.</div>}
-        {transacoes.slice(0,mobile?5:8).map((tx,i)=>(
-          <div key={i} style={{display:"grid",gridTemplateColumns:"32px 1fr auto",gap:10,alignItems:"center",padding:"8px 6px",borderBottom:"1px solid rgba(255,255,255,0.04)"}}>
+        <div style={{fontSize:10,color:"#4a5260",fontFamily:"monospace",marginBottom:12}}>FIREBASE · TEMPO REAL</div>
+        {transacoes.length===0 && <div style={{fontSize:13,color:"#4a5260",padding:"12px 0"}}>Nenhum lançamento ainda.</div>}
+        {transacoes.slice(0,mob?5:8).map((tx,i)=>(
+          <div key={i} style={{display:"grid",gridTemplateColumns:"32px 1fr auto",gap:10,alignItems:"center",padding:"8px 4px",borderBottom:"1px solid rgba(255,255,255,0.04)"}}>
             <div style={{width:32,height:32,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,background:tx.tipo==="receita"?"rgba(0,229,160,0.08)":"rgba(255,79,106,0.08)"}}>
               {ICONES[tx.categoria]||"📦"}
             </div>
@@ -347,9 +349,8 @@ Responda em pt-BR, máx 6 linhas, use os dados reais nos cálculos. Seja direta 
         ))}
       </div>
 
-      {/* CHAT IA */}
       <div style={css.sidebar}>
-        <div style={{padding:"14px 16px",borderBottom:"1px solid rgba(255,255,255,0.06)",display:"flex",alignItems:"center",justifyContent:"space-between",cursor:mobile?"pointer":"default"}} onClick={()=>mobile&&setChatAberto(v=>!v)}>
+        <div style={{padding:"14px 16px",borderBottom:"1px solid rgba(255,255,255,0.06)",display:"flex",alignItems:"center",justifyContent:"space-between",cursor:mob?"pointer":"default"}} onClick={()=>mob&&setChatAberto(v=>!v)}>
           <div>
             <div style={{fontSize:13,fontWeight:700,display:"flex",alignItems:"center",gap:7}}>
               <div style={{...css.dot,width:6,height:6}}/>
@@ -357,11 +358,11 @@ Responda em pt-BR, máx 6 linhas, use os dados reais nos cálculos. Seja direta 
             </div>
             <div style={{fontSize:10,color:"#4a5260",fontFamily:"monospace",marginTop:2}}>GROQ · LLAMA 3.3 70B · GRÁTIS</div>
           </div>
-          {mobile && <span style={{color:"#7a8490",fontSize:16}}>{chatAberto?"▲":"▼"}</span>}
+          {mob && <span style={{color:"#7a8490",fontSize:16}}>{chatAberto?"▲":"▼"}</span>}
         </div>
 
         {chatAberto && <>
-          <div ref={chatRef} style={{flex:1,overflowY:"auto",padding:14,display:"flex",flexDirection:"column",gap:10,maxHeight:mobile?320:400}}>
+          <div ref={chatRef} style={{overflowY:"auto",padding:14,display:"flex",flexDirection:"column",gap:10,maxHeight:mob?300:400}}>
             {msgs.map((m,i)=>(
               <div key={i} style={{alignSelf:m.role==="user"?"flex-end":"flex-start",maxWidth:"100%"}}>
                 <div style={css.msgLabel}>{m.role==="ai"?"FININTELL AI":"VOCÊ"}</div>
@@ -384,7 +385,7 @@ Responda em pt-BR, máx 6 linhas, use os dados reais nos cálculos. Seja direta 
 }
 
 // ─── LANÇAMENTOS ──────────────────────────────────────────────
-function LancamentosPage({ transacoes, userId }) {
+function LancamentosPage({ transacoes, userId, mob }) {
   const [form, setForm] = useState({data:"",descricao:"",categoria:"Alimentação",valor:"",tipo:"despesa"});
   const [ok, setOk] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -403,9 +404,9 @@ function LancamentosPage({ transacoes, userId }) {
 
   return (
     <div>
-      <div style={{fontSize:mobile?18:20,fontWeight:800,marginBottom:4}}>Lançamentos</div>
+      <div style={{fontSize:18,fontWeight:800,marginBottom:4}}>Lançamentos</div>
       <div style={{fontSize:13,color:"#7a8490",marginBottom:20}}>Dados salvos no Firebase em tempo real</div>
-      <div style={css.grid2}>
+      <div style={css.grid2(mob)}>
         <div style={css.panel}>
           <div style={{fontSize:14,fontWeight:600,marginBottom:16}}>Novo lançamento</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
@@ -436,7 +437,7 @@ function LancamentosPage({ transacoes, userId }) {
           <div style={{fontSize:11,color:"#4a5260",fontFamily:"monospace",marginBottom:14}}>{transacoes.length} LANÇAMENTOS</div>
           <div style={{maxHeight:340,overflowY:"auto"}}>
             {transacoes.map((tx,i)=>(
-              <div key={i} style={{display:"grid",gridTemplateColumns:"32px 1fr auto",gap:10,alignItems:"center",padding:"8px 6px",borderBottom:"1px solid rgba(255,255,255,0.04)"}}>
+              <div key={i} style={{display:"grid",gridTemplateColumns:"32px 1fr auto",gap:10,alignItems:"center",padding:"8px 4px",borderBottom:"1px solid rgba(255,255,255,0.04)"}}>
                 <div style={{width:32,height:32,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,background:tx.tipo==="receita"?"rgba(0,229,160,0.08)":"rgba(255,79,106,0.08)"}}>{ICONES[tx.categoria]||"📦"}</div>
                 <div><div style={{fontSize:13,fontWeight:500}}>{tx.descricao}</div><div style={{fontSize:10,color:"#4a5260",fontFamily:"monospace"}}>{tx.data} · {tx.categoria}</div></div>
                 <div style={{fontFamily:"monospace",fontSize:12,color:tx.tipo==="receita"?"#00e5a0":"#ff4f6a"}}>{tx.tipo==="receita"?"+":"−"}R$ {Number(tx.valor).toLocaleString("pt-BR")}</div>
@@ -450,15 +451,15 @@ function LancamentosPage({ transacoes, userId }) {
 }
 
 // ─── ALERTAS ──────────────────────────────────────────────────
-function AlertasPage({ transacoes }) {
+function AlertasPage({ transacoes, mob }) {
   const todos = CATEGORIAS.filter(c=>c!=="Receita").map(cat=>({name:cat,value:transacoes.filter(t=>t.categoria===cat&&t.tipo==="despesa").reduce((s,t)=>s+Number(t.valor),0)}));
   const alertas = todos.filter(c=>LIMITES[c.name]&&c.value>=LIMITES[c.name]*0.5).map(c=>({...c,limite:LIMITES[c.name],pct:Math.round((c.value/LIMITES[c.name])*100),tipo:c.value>LIMITES[c.name]?"critico":"atencao"}));
 
   return (
     <div>
-      <div style={{fontSize:mobile?18:20,fontWeight:800,marginBottom:4}}>Alertas</div>
+      <div style={{fontSize:18,fontWeight:800,marginBottom:4}}>Alertas</div>
       <div style={{fontSize:13,color:"#7a8490",marginBottom:20}}>Monitoramento automático de gastos</div>
-      <div style={css.grid2}>
+      <div style={css.grid2(mob)}>
         <div>
           <div style={{fontSize:12,fontWeight:500,color:"#7a8490",marginBottom:12,fontFamily:"monospace"}}>ALERTAS ATIVOS — {alertas.length}</div>
           {alertas.length===0&&<div style={{fontSize:13,color:"#4a5260",padding:"20px 0"}}>✅ Todos os gastos dentro do limite!</div>}
@@ -505,10 +506,24 @@ export default function App() {
   const [page, setPage] = useState("dashboard");
   const [transacoes, setTransacoes] = useState([]);
   const [groqKey, setGroqKey] = useState(()=>localStorage.getItem(GROQ_KEY)||import.meta.env.VITE_GROQ_KEY||"");
-  const [menuAberto, setMenuAberto] = useState(false);
+  const [mob, setMob] = useState(isMobile());
 
+  // Detecta resize
+  useEffect(()=>{
+    const handler = ()=>setMob(isMobile());
+    window.addEventListener("resize",handler);
+    return ()=>window.removeEventListener("resize",handler);
+  },[]);
+
+  // Auth listener
   useEffect(()=>onAuthStateChanged(auth,u=>{setUser(u);setAuthReady(true);}),[]);
 
+  // Captura redirect do Google no mobile
+  useEffect(()=>{
+    getRedirectResult(auth).catch(()=>{});
+  },[]);
+
+  // Firestore listener
   useEffect(()=>{
     if(!user){setTransacoes([]);return;}
     const q=query(collection(db,"users",user.uid,"transacoes"),orderBy("criadoEm","desc"));
@@ -529,40 +544,38 @@ export default function App() {
 
   const tabs=[
     {id:"dashboard",label:"Dashboard",icon:"📊"},
-    {id:"lancamentos",label:"Lançamentos",icon:"➕"},
+    {id:"lancamentos",label:"Lançar",icon:"➕"},
     {id:"alertas",label:"Alertas",icon:"🔔"},
     {id:"config",label:"Config",icon:"⚙️"},
   ];
 
   return (
     <div style={css.page}>
-      {/* NAVBAR */}
-      <nav style={css.nav}>
+      <nav style={{...css.nav,padding:mob?"0 16px":"0 28px"}}>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
           <div style={css.dot}/>
           <span style={{fontSize:14,fontWeight:700,letterSpacing:"0.08em"}}>FININTELL</span>
         </div>
 
-        {/* Desktop tabs */}
-        {!mobile && (
+        {!mob && (
           <div style={{display:"flex",gap:4}}>
             {tabs.map(t=><button key={t.id} style={css.tab(page===t.id)} onClick={()=>setPage(t.id)}>{t.label}</button>)}
           </div>
         )}
 
         <div style={{display:"flex",gap:8,alignItems:"center"}}>
-          {!mobile && <span style={{fontSize:10,padding:"3px 10px",borderRadius:20,fontFamily:"monospace",background:"rgba(0,229,160,0.1)",color:"#00e5a0",border:"1px solid rgba(0,229,160,0.2)"}}>● FIREBASE</span>}
+          {!mob && <span style={{fontSize:10,padding:"3px 10px",borderRadius:20,fontFamily:"monospace",background:"rgba(0,229,160,0.1)",color:"#00e5a0",border:"1px solid rgba(0,229,160,0.2)"}}>● FIREBASE</span>}
           <div style={{display:"flex",alignItems:"center",gap:6,background:"#181d22",border:"1px solid rgba(255,255,255,0.08)",borderRadius:20,padding:"4px 10px 4px 6px"}}>
             <div style={{width:22,height:22,borderRadius:"50%",background:"#00e5a0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700,color:"#080b0e"}}>{initials}</div>
-            {!mobile && <span style={{fontSize:12}}>{user.displayName||user.email?.split("@")[0]}</span>}
+            {!mob && <span style={{fontSize:12}}>{user.displayName||user.email?.split("@")[0]}</span>}
             <button style={{fontSize:11,color:"#ff4f6a",cursor:"pointer",background:"none",border:"none",padding:0}} onClick={()=>signOut(auth)}>Sair</button>
           </div>
         </div>
       </nav>
 
-      {/* Mobile bottom nav */}
-      {mobile && (
-        <div style={{position:"fixed",bottom:0,left:0,right:0,background:"rgba(8,11,14,0.95)",backdropFilter:"blur(12px)",borderTop:"1px solid rgba(255,255,255,0.06)",display:"flex",zIndex:100,paddingBottom:"env(safe-area-inset-bottom)"}}>
+      {/* Bottom nav mobile */}
+      {mob && (
+        <div style={{position:"fixed",bottom:0,left:0,right:0,background:"rgba(8,11,14,0.96)",backdropFilter:"blur(12px)",borderTop:"1px solid rgba(255,255,255,0.06)",display:"flex",zIndex:100,paddingBottom:"env(safe-area-inset-bottom,8px)"}}>
           {tabs.map(t=>(
             <button key={t.id} onClick={()=>setPage(t.id)} style={{flex:1,padding:"10px 4px",border:"none",background:"transparent",display:"flex",flexDirection:"column",alignItems:"center",gap:3,cursor:"pointer"}}>
               <span style={{fontSize:18}}>{t.icon}</span>
@@ -572,13 +585,13 @@ export default function App() {
         </div>
       )}
 
-      <div style={{...css.main,paddingBottom:mobile?"80px":"24px"}}>
-        {page==="dashboard"   && <DashboardPage transacoes={transacoes} groqKey={groqKey}/>}
-        {page==="lancamentos" && <LancamentosPage transacoes={transacoes} userId={user.uid}/>}
-        {page==="alertas"     && <AlertasPage transacoes={transacoes}/>}
+      <div style={{...css.main,paddingBottom:mob?"88px":"24px",maxWidth:mob?"100%":"1400px",margin:"0 auto",width:"100%"}}>
+        {page==="dashboard"   && <DashboardPage transacoes={transacoes} groqKey={groqKey} mob={mob}/>}
+        {page==="lancamentos" && <LancamentosPage transacoes={transacoes} userId={user.uid} mob={mob}/>}
+        {page==="alertas"     && <AlertasPage transacoes={transacoes} mob={mob}/>}
         {page==="config"      && (
           <div>
-            <div style={{fontSize:mobile?18:20,fontWeight:800,marginBottom:4}}>Configurações</div>
+            <div style={{fontSize:18,fontWeight:800,marginBottom:4}}>Configurações</div>
             <div style={{fontSize:13,color:"#7a8490",marginBottom:20}}>Conta: {user.email}</div>
             <div style={{maxWidth:480}}>
               <div style={css.panel}>
