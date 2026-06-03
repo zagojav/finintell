@@ -8,7 +8,7 @@ import {
 } from "firebase/auth";
 import {
   getFirestore, collection, addDoc, onSnapshot,
-  query, orderBy, serverTimestamp
+  query, orderBy, serverTimestamp, doc, setDoc, getDoc
 } from "firebase/firestore";
 import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 
@@ -26,10 +26,19 @@ const db = getFirestore(firebaseApp);
 const googleProvider = new GoogleAuthProvider();
 
 const GROQ_KEY = "finintell_groq_key";
-const CATEGORIAS = ["Moradia","Alimentação","Transporte","Saúde","Lazer","Outros","Receita"];
-const LIMITES = { Alimentação:1500, Transporte:800, Lazer:600, Saúde:500, Moradia:3000, Outros:300 };
-const CORES = ["#4d9fff","#00e5a0","#f5a623","#ff4f6a","#b57bee","#7a8490","#5dcaa5"];
-const ICONES = { Moradia:"🏠", Alimentação:"🛒", Transporte:"🚗", Saúde:"💊", Lazer:"🎭", Receita:"💰", Outros:"📦" };
+
+const LIMITES_PADRAO = {
+  Alimentação: 1500,
+  Transporte: 800,
+  Lazer: 600,
+  Saúde: 500,
+  Moradia: 3000,
+  Outros: 300
+};
+
+const CORES = ["#4d9fff","#00e5a0","#f5a623","#ff4f6a","#b57bee","#7a8490","#5dcaa5","#f06292","#aed581","#4dd0e1"];
+const ICONES_PADRAO = { Moradia:"🏠", Alimentação:"🛒", Transporte:"🚗", Saúde:"💊", Lazer:"🎭", Receita:"💰", Outros:"📦" };
+const EMOJIS = ["🏠","🛒","🚗","💊","🎭","📦","🍕","✈️","👕","📱","💡","🐾","📚","💪","🎮","🎵","💈","🏋️","🌿","💼"];
 
 const isMobile = () => /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.innerWidth < 768;
 
@@ -63,7 +72,8 @@ function calcDados(transacoes) {
   const despesa = transacoes.filter(t=>t.tipo==="despesa").reduce((s,t)=>s+Number(t.valor),0);
   const saldo = receita - despesa;
   const poupanca = receita > 0 ? Math.round((saldo/receita)*100) : 0;
-  const porCategoria = CATEGORIAS.filter(c=>c!=="Receita").map(cat=>({
+  const todasCats = [...new Set(transacoes.filter(t=>t.tipo==="despesa").map(t=>t.categoria))];
+  const porCategoria = todasCats.map(cat=>({
     name:cat,
     value:transacoes.filter(t=>t.categoria===cat&&t.tipo==="despesa").reduce((s,t)=>s+Number(t.valor),0)
   })).filter(c=>c.value>0);
@@ -84,13 +94,15 @@ const css = {
   nav: { padding:"0 16px", height:56, display:"flex", alignItems:"center", justifyContent:"space-between", borderBottom:"1px solid rgba(255,255,255,0.06)", background:"rgba(8,11,14,0.92)", backdropFilter:"blur(12px)", position:"sticky", top:0, zIndex:100 },
   main: { padding:"16px", display:"flex", flexDirection:"column", gap:14 },
   grid4: { display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:10 },
-  grid2: (mob) => ({ display:"grid", gridTemplateColumns:mob?"1fr":"1fr 1fr", gap:mob?10:14 }),
-  gridDash: (mob) => ({ display:"grid", gridTemplateColumns:mob?"1fr":"1fr 360px", gap:mob?10:14 }),
+  grid2: mob => ({ display:"grid", gridTemplateColumns:mob?"1fr":"1fr 1fr", gap:mob?10:14 }),
   kpi: c => ({ background:"#111518", border:"1px solid rgba(255,255,255,0.06)", borderTop:`2px solid ${c}`, borderRadius:12, padding:"14px" }),
   panel: { background:"#111518", border:"1px solid rgba(255,255,255,0.06)", borderRadius:12, padding:16 },
   sidebar: { background:"#111518", border:"1px solid rgba(255,255,255,0.06)", borderRadius:12, display:"flex", flexDirection:"column" },
   tab: a => ({ padding:"6px 14px", borderRadius:6, border:"none", cursor:"pointer", fontSize:12, fontWeight:500, background:a?"rgba(0,229,160,0.1)":"transparent", color:a?"#00e5a0":"#7a8490" }),
   btn: { background:"#00e5a0", color:"#080b0e", border:"none", borderRadius:8, padding:"12px 24px", fontSize:13, fontWeight:700, cursor:"pointer", width:"100%" },
+  btnSm: { background:"#00e5a0", color:"#080b0e", border:"none", borderRadius:6, padding:"6px 14px", fontSize:12, fontWeight:700, cursor:"pointer" },
+  btnGhost: { background:"transparent", color:"#7a8490", border:"1px solid rgba(255,255,255,0.08)", borderRadius:6, padding:"6px 14px", fontSize:12, cursor:"pointer" },
+  btnDanger: { background:"rgba(255,79,106,0.1)", color:"#ff4f6a", border:"1px solid rgba(255,79,106,0.2)", borderRadius:6, padding:"6px 10px", fontSize:12, cursor:"pointer" },
   btnGoogle: { width:"100%", background:"transparent", color:"#e8eaed", border:"1px solid rgba(255,255,255,0.12)", borderRadius:8, padding:"11px", fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:8, marginBottom:16 },
   input: { width:"100%", background:"#181d22", border:"1px solid rgba(255,255,255,0.08)", borderRadius:8, padding:"11px 14px", color:"#e8eaed", fontSize:13, outline:"none", boxSizing:"border-box", marginBottom:12 },
   fieldInput: { width:"100%", background:"#181d22", border:"1px solid rgba(255,255,255,0.08)", borderRadius:8, padding:"9px 12px", color:"#e8eaed", fontSize:13, outline:"none", boxSizing:"border-box" },
@@ -104,6 +116,8 @@ const css = {
   msgLabel: { fontFamily:"monospace", fontSize:9, color:"#4a5260", marginBottom:3 },
   chip: { fontSize:10, padding:"3px 10px", borderRadius:20, background:"rgba(0,229,160,0.06)", color:"#00e5a0", border:"1px solid rgba(0,229,160,0.15)", cursor:"pointer", fontFamily:"monospace", whiteSpace:"nowrap" },
   alertItem: t => ({ display:"flex", gap:12, alignItems:"flex-start", padding:"12px 14px", borderRadius:8, background:t==="critico"?"rgba(255,79,106,0.06)":"rgba(245,166,35,0.06)", border:`1px solid ${t==="critico"?"rgba(255,79,106,0.15)":"rgba(245,166,35,0.15)"}`, marginBottom:8 }),
+  modal: { position:"fixed", inset:0, background:"rgba(0,0,0,0.7)", zIndex:200, display:"flex", alignItems:"center", justifyContent:"center", padding:16 },
+  modalBox: { background:"#111518", border:"1px solid rgba(255,255,255,0.1)", borderRadius:16, padding:24, width:"100%", maxWidth:420 },
 };
 
 // ─── AUTH PAGE ────────────────────────────────────────────────
@@ -169,14 +183,12 @@ function AuthPage() {
           <div style={css.dot}/>
           <span style={{ fontSize:15, fontWeight:800, letterSpacing:"0.08em", color:"#e8eaed" }}>FININTELL</span>
         </div>
-
         <div style={{ fontSize:22, fontWeight:800, color:"#e8eaed", marginBottom:6, letterSpacing:"-0.02em" }}>
           {mode==="login"?"Bem-vindo de volta":mode==="cadastro"?"Criar conta":"Redefinir senha"}
         </div>
         <div style={{ fontSize:13, color:"#7a8490", marginBottom:24 }}>
           {mode==="login"?"Entre para acessar seu dashboard":mode==="cadastro"?"Comece a controlar suas finanças":"Enviaremos um link para seu email"}
         </div>
-
         {mode !== "esqueci" && (
           <>
             <button style={css.btnGoogle} onClick={handleGoogle} disabled={loading}>
@@ -190,23 +202,18 @@ function AuthPage() {
             </div>
           </>
         )}
-
         {erro && <div style={css.err}>{erro}</div>}
         {sucesso && <div style={css.ok}>{sucesso}</div>}
-
         {mode==="cadastro" && <>
           <label style={css.label}>NOME</label>
           <input style={css.input} placeholder="Seu nome" value={nome} onChange={e=>setNome(e.target.value)}/>
         </>}
-
         <label style={css.label}>EMAIL</label>
         <input style={css.input} type="email" placeholder="seu@email.com" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&(mode==="esqueci"?handleEsqueci():handleEmail())}/>
-
         {mode !== "esqueci" && <>
           <label style={css.label}>SENHA</label>
           <input style={{ ...css.input, marginBottom:mode==="login"?8:20 }} type="password" placeholder="••••••••" value={senha} onChange={e=>setSenha(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleEmail()}/>
         </>}
-
         {mode==="login" && (
           <div style={{ textAlign:"right", marginBottom:16 }}>
             <span style={{ fontSize:12, color:"#4d9fff", cursor:"pointer" }} onClick={()=>{setMode("esqueci");setErro("");setSucesso("");}}>
@@ -214,16 +221,12 @@ function AuthPage() {
             </span>
           </div>
         )}
-
         <button style={{ ...css.btn, opacity:loading?0.6:1, marginBottom:16 }} onClick={mode==="esqueci"?handleEsqueci:handleEmail} disabled={loading}>
           {loading?"Aguarde...":mode==="login"?"Entrar":mode==="cadastro"?"Criar conta":"Enviar link de redefinição"}
         </button>
-
         <div style={{ fontSize:12, color:"#7a8490", textAlign:"center" }}>
           {mode==="esqueci" ? (
-            <span style={{ color:"#00e5a0", cursor:"pointer", textDecoration:"underline" }} onClick={()=>{setMode("login");setErro("");setSucesso("");}}>
-              ← Voltar ao login
-            </span>
+            <span style={{ color:"#00e5a0", cursor:"pointer", textDecoration:"underline" }} onClick={()=>{setMode("login");setErro("");setSucesso("");}}>← Voltar ao login</span>
           ) : (
             <>
               {mode==="login"?"Não tem conta? ":"Já tem conta? "}
@@ -318,7 +321,7 @@ Responda em pt-BR, máx 6 linhas, use dados reais, seja direta e prática.`;
           {porCategoria.map((c,i)=>(
             <div key={c.name} style={{marginBottom:10}}>
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
-                <span style={{fontSize:12}}>{ICONES[c.name]} {c.name}</span>
+                <span style={{fontSize:12}}>{ICONES_PADRAO[c.name]||"📦"} {c.name}</span>
                 <span style={{fontSize:11,fontFamily:"monospace",color:"#7a8490"}}>{fmt(c.value)}</span>
               </div>
               <div style={{height:4,background:"rgba(255,255,255,0.06)",borderRadius:2}}>
@@ -336,7 +339,7 @@ Responda em pt-BR, máx 6 linhas, use dados reais, seja direta e prática.`;
         {transacoes.slice(0,mob?5:8).map((tx,i)=>(
           <div key={i} style={{display:"grid",gridTemplateColumns:"32px 1fr auto",gap:10,alignItems:"center",padding:"8px 4px",borderBottom:"1px solid rgba(255,255,255,0.04)"}}>
             <div style={{width:32,height:32,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,background:tx.tipo==="receita"?"rgba(0,229,160,0.08)":"rgba(255,79,106,0.08)"}}>
-              {ICONES[tx.categoria]||"📦"}
+              {ICONES_PADRAO[tx.categoria]||"📦"}
             </div>
             <div>
               <div style={{fontSize:13,fontWeight:500}}>{tx.descricao}</div>
@@ -360,7 +363,6 @@ Responda em pt-BR, máx 6 linhas, use dados reais, seja direta e prática.`;
           </div>
           {mob && <span style={{color:"#7a8490",fontSize:16}}>{chatAberto?"▲":"▼"}</span>}
         </div>
-
         {chatAberto && <>
           <div ref={chatRef} style={{overflowY:"auto",padding:14,display:"flex",flexDirection:"column",gap:10,maxHeight:mob?300:400}}>
             {msgs.map((m,i)=>(
@@ -385,8 +387,9 @@ Responda em pt-BR, máx 6 linhas, use dados reais, seja direta e prática.`;
 }
 
 // ─── LANÇAMENTOS ──────────────────────────────────────────────
-function LancamentosPage({ transacoes, userId, mob }) {
-  const [form, setForm] = useState({data:"",descricao:"",categoria:"Alimentação",valor:"",tipo:"despesa"});
+function LancamentosPage({ transacoes, userId, mob, limites }) {
+  const categorias = ["Receita", ...Object.keys(limites)];
+  const [form, setForm] = useState({data:"",descricao:"",categoria:Object.keys(limites)[0]||"Alimentação",valor:"",tipo:"despesa"});
   const [ok, setOk] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -396,7 +399,7 @@ function LancamentosPage({ transacoes, userId, mob }) {
     try {
       await addDoc(collection(db,"users",userId,"transacoes"),{...form,valor:Number(form.valor),criadoEm:serverTimestamp()});
       setOk(true);
-      setForm({data:"",descricao:"",categoria:"Alimentação",valor:"",tipo:"despesa"});
+      setForm(f=>({...f,data:"",descricao:"",valor:""}));
       setTimeout(()=>setOk(false),2500);
     } catch(e){console.error(e);}
     setLoading(false);
@@ -412,7 +415,7 @@ function LancamentosPage({ transacoes, userId, mob }) {
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
             <div><label style={css.label}>DATA</label><input style={css.fieldInput} type="date" value={form.data} onChange={e=>setForm({...form,data:e.target.value})}/></div>
             <div><label style={css.label}>TIPO</label>
-              <select style={css.select} value={form.tipo} onChange={e=>setForm({...form,tipo:e.target.value})}>
+              <select style={css.select} value={form.tipo} onChange={e=>setForm({...form,tipo:e.target.value,categoria:e.target.value==="receita"?"Receita":Object.keys(limites)[0]||"Alimentação"})}>
                 <option value="despesa">Despesa</option>
                 <option value="receita">Receita</option>
               </select>
@@ -422,7 +425,7 @@ function LancamentosPage({ transacoes, userId, mob }) {
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:20}}>
             <div><label style={css.label}>CATEGORIA</label>
               <select style={css.select} value={form.categoria} onChange={e=>setForm({...form,categoria:e.target.value})}>
-                {CATEGORIAS.map(c=><option key={c}>{c}</option>)}
+                {(form.tipo==="receita"?["Receita"]:Object.keys(limites)).map(c=><option key={c}>{c}</option>)}
               </select>
             </div>
             <div><label style={css.label}>VALOR (R$)</label><input style={css.fieldInput} type="number" placeholder="0,00" value={form.valor} onChange={e=>setForm({...form,valor:e.target.value})}/></div>
@@ -438,7 +441,7 @@ function LancamentosPage({ transacoes, userId, mob }) {
           <div style={{maxHeight:340,overflowY:"auto"}}>
             {transacoes.map((tx,i)=>(
               <div key={i} style={{display:"grid",gridTemplateColumns:"32px 1fr auto",gap:10,alignItems:"center",padding:"8px 4px",borderBottom:"1px solid rgba(255,255,255,0.04)"}}>
-                <div style={{width:32,height:32,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,background:tx.tipo==="receita"?"rgba(0,229,160,0.08)":"rgba(255,79,106,0.08)"}}>{ICONES[tx.categoria]||"📦"}</div>
+                <div style={{width:32,height:32,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,background:tx.tipo==="receita"?"rgba(0,229,160,0.08)":"rgba(255,79,106,0.08)"}}>{limites[tx.categoria]?.icone||ICONES_PADRAO[tx.categoria]||"📦"}</div>
                 <div><div style={{fontSize:13,fontWeight:500}}>{tx.descricao}</div><div style={{fontSize:10,color:"#4a5260",fontFamily:"monospace"}}>{tx.data} · {tx.categoria}</div></div>
                 <div style={{fontFamily:"monospace",fontSize:12,color:tx.tipo==="receita"?"#00e5a0":"#ff4f6a"}}>{tx.tipo==="receita"?"+":"−"}R$ {Number(tx.valor).toLocaleString("pt-BR")}</div>
               </div>
@@ -450,25 +453,119 @@ function LancamentosPage({ transacoes, userId, mob }) {
   );
 }
 
+// ─── MODAL CATEGORIA ──────────────────────────────────────────
+function ModalCategoria({ cat, onSave, onClose }) {
+  const [nome, setNome] = useState(cat?.nome||"");
+  const [limite, setLimite] = useState(cat?.limite||"");
+  const [icone, setIcone] = useState(cat?.icone||"📦");
+
+  return (
+    <div style={css.modal} onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div style={css.modalBox}>
+        <div style={{fontSize:16,fontWeight:700,marginBottom:4}}>{cat?"Editar categoria":"Nova categoria"}</div>
+        <div style={{fontSize:12,color:"#7a8490",marginBottom:20}}>Os limites definem quando você recebe alertas</div>
+
+        <label style={css.label}>ÍCONE</label>
+        <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:16,background:"#181d22",padding:10,borderRadius:8}}>
+          {EMOJIS.map(e=>(
+            <span key={e} onClick={()=>setIcone(e)} style={{fontSize:20,cursor:"pointer",padding:4,borderRadius:6,background:icone===e?"rgba(0,229,160,0.15)":"transparent",border:icone===e?"1px solid rgba(0,229,160,0.3)":"1px solid transparent"}}>{e}</span>
+          ))}
+        </div>
+
+        <label style={css.label}>NOME DA CATEGORIA</label>
+        <input style={{...css.fieldInput,marginBottom:12}} placeholder="Ex: Pet, Academia, Assinaturas..." value={nome} onChange={e=>setNome(e.target.value)} disabled={!!cat?.padrao}/>
+        {cat?.padrao && <div style={{fontSize:11,color:"#4a5260",marginBottom:12,marginTop:-8}}>Categoria padrão — nome não pode ser alterado</div>}
+
+        <label style={css.label}>LIMITE MENSAL (R$)</label>
+        <input style={{...css.fieldInput,marginBottom:20}} type="number" placeholder="Ex: 500" value={limite} onChange={e=>setLimite(e.target.value)}/>
+
+        <div style={{display:"flex",gap:8}}>
+          <button style={css.btnSm} onClick={()=>{if(!nome.trim()||!limite)return;onSave({nome:nome.trim(),limite:Number(limite),icone});}}>Salvar</button>
+          <button style={css.btnGhost} onClick={onClose}>Cancelar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── ALERTAS ──────────────────────────────────────────────────
-function AlertasPage({ transacoes, mob }) {
-  const todos = CATEGORIAS.filter(c=>c!=="Receita").map(cat=>({name:cat,value:transacoes.filter(t=>t.categoria===cat&&t.tipo==="despesa").reduce((s,t)=>s+Number(t.valor),0)}));
-  const alertas = todos.filter(c=>LIMITES[c.name]&&c.value>=LIMITES[c.name]*0.5).map(c=>({...c,limite:LIMITES[c.name],pct:Math.round((c.value/LIMITES[c.name])*100),tipo:c.value>LIMITES[c.name]?"critico":"atencao"}));
+function AlertasPage({ transacoes, mob, limites, onSaveLimites }) {
+  const [modal, setModal] = useState(null); // null | {modo: 'novo'|'editar', cat?}
+  const [confirmDel, setConfirmDel] = useState(null);
+
+  const gastosPorCat = {};
+  transacoes.filter(t=>t.tipo==="despesa").forEach(tx=>{
+    gastosPorCat[tx.categoria] = (gastosPorCat[tx.categoria]||0) + Number(tx.valor);
+  });
+
+  const alertas = Object.entries(limites).filter(([cat,info])=>{
+    const gasto = gastosPorCat[cat]||0;
+    return gasto >= info.limite * 0.5;
+  }).map(([cat,info])=>{
+    const gasto = gastosPorCat[cat]||0;
+    const pct = Math.round((gasto/info.limite)*100);
+    return { cat, gasto, limite:info.limite, icone:info.icone, pct, tipo:gasto>info.limite?"critico":"atencao" };
+  });
+
+  const handleSave = (catKey, dados) => {
+    const novoLimites = { ...limites };
+    if (modal.modo === "novo") {
+      novoLimites[dados.nome] = { limite: dados.limite, icone: dados.icone };
+    } else {
+      novoLimites[catKey] = { ...novoLimites[catKey], limite: dados.limite, icone: dados.icone };
+    }
+    onSaveLimites(novoLimites);
+    setModal(null);
+  };
+
+  const handleDelete = (cat) => {
+    const novoLimites = { ...limites };
+    delete novoLimites[cat];
+    onSaveLimites(novoLimites);
+    setConfirmDel(null);
+  };
 
   return (
     <div>
-      <div style={{fontSize:18,fontWeight:800,marginBottom:4}}>Alertas</div>
-      <div style={{fontSize:13,color:"#7a8490",marginBottom:20}}>Monitoramento automático de gastos</div>
+      {modal && (
+        <ModalCategoria
+          cat={modal.modo==="editar" ? { ...limites[modal.cat], nome:modal.cat, padrao:!!LIMITES_PADRAO[modal.cat] } : null}
+          onSave={dados => handleSave(modal.cat, dados)}
+          onClose={()=>setModal(null)}
+        />
+      )}
+      {confirmDel && (
+        <div style={css.modal} onClick={e=>e.target===e.currentTarget&&setConfirmDel(null)}>
+          <div style={css.modalBox}>
+            <div style={{fontSize:16,fontWeight:700,marginBottom:8}}>Excluir categoria?</div>
+            <div style={{fontSize:13,color:"#7a8490",marginBottom:20}}>A categoria <strong style={{color:"#e8eaed"}}>{confirmDel}</strong> será removida. Os lançamentos existentes não serão afetados.</div>
+            <div style={{display:"flex",gap:8}}>
+              <button style={{...css.btnDanger,padding:"8px 16px"}} onClick={()=>handleDelete(confirmDel)}>Excluir</button>
+              <button style={css.btnGhost} onClick={()=>setConfirmDel(null)}>Cancelar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20}}>
+        <div>
+          <div style={{fontSize:18,fontWeight:800,marginBottom:4}}>Alertas & Categorias</div>
+          <div style={{fontSize:13,color:"#7a8490"}}>Gerencie seus limites e categorias de gastos</div>
+        </div>
+        <button style={css.btnSm} onClick={()=>setModal({modo:"novo"})}>+ Nova categoria</button>
+      </div>
+
       <div style={css.grid2(mob)}>
+        {/* ALERTAS ATIVOS */}
         <div>
           <div style={{fontSize:12,fontWeight:500,color:"#7a8490",marginBottom:12,fontFamily:"monospace"}}>ALERTAS ATIVOS — {alertas.length}</div>
-          {alertas.length===0&&<div style={{fontSize:13,color:"#4a5260",padding:"20px 0"}}>✅ Todos os gastos dentro do limite!</div>}
+          {alertas.length===0 && <div style={{...css.panel,fontSize:13,color:"#4a5260",padding:"20px"}}>✅ Todos os gastos dentro do limite!</div>}
           {alertas.map(a=>(
-            <div key={a.name} style={css.alertItem(a.tipo)}>
+            <div key={a.cat} style={css.alertItem(a.tipo)}>
               <span style={{fontSize:18}}>{a.tipo==="critico"?"🚨":"⚠️"}</span>
               <div style={{flex:1}}>
-                <div style={{fontSize:13,fontWeight:600,marginBottom:2}}>{a.name}</div>
-                <div style={{fontSize:11,color:"#7a8490",fontFamily:"monospace"}}>R$ {a.value.toLocaleString("pt-BR")} / R$ {a.limite.toLocaleString("pt-BR")} — {a.pct}%</div>
+                <div style={{fontSize:13,fontWeight:600,marginBottom:2}}>{a.icone} {a.cat}</div>
+                <div style={{fontSize:11,color:"#7a8490",fontFamily:"monospace"}}>R$ {a.gasto.toLocaleString("pt-BR")} / R$ {a.limite.toLocaleString("pt-BR")} — {a.pct}%</div>
                 <div style={{marginTop:6,height:4,background:"rgba(255,255,255,0.06)",borderRadius:2}}>
                   <div style={{height:"100%",width:`${Math.min(a.pct,100)}%`,background:a.tipo==="critico"?"#ff4f6a":"#f5a623",borderRadius:2}}/>
                 </div>
@@ -476,23 +573,30 @@ function AlertasPage({ transacoes, mob }) {
             </div>
           ))}
         </div>
+
+        {/* GERENCIAR CATEGORIAS */}
         <div style={css.panel}>
-          <div style={{fontSize:14,fontWeight:600,marginBottom:14}}>Limites por categoria</div>
-          {Object.entries(LIMITES).map(([cat,lim])=>{
-            const gasto=todos.find(c=>c.name===cat)?.value||0;
-            const pct=Math.round((gasto/lim)*100);
+          <div style={{fontSize:14,fontWeight:600,marginBottom:14}}>Categorias e limites</div>
+          {Object.entries(limites).map(([cat,info],i)=>{
+            const gasto = gastosPorCat[cat]||0;
+            const pct = Math.round((gasto/info.limite)*100);
             return (
-              <div key={cat} style={{marginBottom:12}}>
-                <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
-                  <span style={{fontSize:12}}>{ICONES[cat]} {cat}</span>
-                  <span style={{fontSize:11,fontFamily:"monospace",color:"#7a8490"}}>R$ {gasto.toLocaleString("pt-BR")} / R$ {lim.toLocaleString("pt-BR")}</span>
+              <div key={cat} style={{marginBottom:14,paddingBottom:14,borderBottom:"1px solid rgba(255,255,255,0.04)"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                  <span style={{fontSize:13,fontWeight:500}}>{info.icone} {cat}</span>
+                  <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                    <span style={{fontSize:11,fontFamily:"monospace",color:"#7a8490"}}>R$ {gasto.toLocaleString("pt-BR")} / R$ {info.limite.toLocaleString("pt-BR")}</span>
+                    <button style={{...css.btnGhost,padding:"3px 8px",fontSize:11}} onClick={()=>setModal({modo:"editar",cat})}>✏️</button>
+                    <button style={{...css.btnDanger,padding:"3px 8px",fontSize:11}} onClick={()=>setConfirmDel(cat)}>🗑️</button>
+                  </div>
                 </div>
                 <div style={{height:4,background:"rgba(255,255,255,0.06)",borderRadius:2}}>
-                  <div style={{height:"100%",width:`${Math.min(pct,100)}%`,background:pct>=100?"#ff4f6a":pct>=50?"#f5a623":"#00e5a0",borderRadius:2,transition:"width .4s"}}/>
+                  <div style={{height:"100%",width:`${Math.min(pct,100)}%`,background:pct>=100?"#ff4f6a":pct>=50?"#f5a623":CORES[i%CORES.length],borderRadius:2,transition:"width .4s"}}/>
                 </div>
               </div>
             );
           })}
+          <button style={{...css.btnGhost,width:"100%",marginTop:4,fontSize:12}} onClick={()=>setModal({modo:"novo"})}>+ Adicionar categoria</button>
         </div>
       </div>
     </div>
@@ -505,30 +609,43 @@ export default function App() {
   const [authReady, setAuthReady] = useState(false);
   const [page, setPage] = useState("dashboard");
   const [transacoes, setTransacoes] = useState([]);
+  const [limites, setLimites] = useState(
+    Object.fromEntries(Object.entries(LIMITES_PADRAO).map(([k,v])=>[k,{limite:v,icone:ICONES_PADRAO[k]||"📦"}]))
+  );
   const [groqKey, setGroqKey] = useState(()=>localStorage.getItem(GROQ_KEY)||import.meta.env.VITE_GROQ_KEY||"");
   const [mob, setMob] = useState(isMobile());
 
-  // Detecta resize
   useEffect(()=>{
-    const handler = ()=>setMob(isMobile());
+    const handler=()=>setMob(isMobile());
     window.addEventListener("resize",handler);
     return ()=>window.removeEventListener("resize",handler);
   },[]);
 
-  // Auth listener
   useEffect(()=>onAuthStateChanged(auth,u=>{setUser(u);setAuthReady(true);}),[]);
+  useEffect(()=>{ getRedirectResult(auth).catch(()=>{}); },[]);
 
-  // Captura redirect do Google no mobile
+  // Carrega limites do Firestore
   useEffect(()=>{
-    getRedirectResult(auth).catch(()=>{});
-  },[]);
+    if(!user) return;
+    const ref = doc(db,"users",user.uid,"config","limites");
+    getDoc(ref).then(snap=>{
+      if(snap.exists()) setLimites(snap.data().limites);
+    });
+  },[user]);
 
-  // Firestore listener
+  // Firestore transacoes
   useEffect(()=>{
     if(!user){setTransacoes([]);return;}
     const q=query(collection(db,"users",user.uid,"transacoes"),orderBy("criadoEm","desc"));
     return onSnapshot(q,snap=>setTransacoes(snap.docs.map(d=>({id:d.id,...d.data()}))));
   },[user]);
+
+  const saveLimites = async (novosLimites) => {
+    setLimites(novosLimites);
+    if(user) {
+      await setDoc(doc(db,"users",user.uid,"config","limites"),{limites:novosLimites});
+    }
+  };
 
   const saveKey = k=>{localStorage.setItem(GROQ_KEY,k);setGroqKey(k);};
   const initials = user?.displayName?.split(" ").map(n=>n[0]).join("").slice(0,2).toUpperCase()||user?.email?.[0]?.toUpperCase()||"U";
@@ -556,13 +673,11 @@ export default function App() {
           <div style={css.dot}/>
           <span style={{fontSize:14,fontWeight:700,letterSpacing:"0.08em"}}>FININTELL</span>
         </div>
-
         {!mob && (
           <div style={{display:"flex",gap:4}}>
             {tabs.map(t=><button key={t.id} style={css.tab(page===t.id)} onClick={()=>setPage(t.id)}>{t.label}</button>)}
           </div>
         )}
-
         <div style={{display:"flex",gap:8,alignItems:"center"}}>
           {!mob && <span style={{fontSize:10,padding:"3px 10px",borderRadius:20,fontFamily:"monospace",background:"rgba(0,229,160,0.1)",color:"#00e5a0",border:"1px solid rgba(0,229,160,0.2)"}}>● FIREBASE</span>}
           <div style={{display:"flex",alignItems:"center",gap:6,background:"#181d22",border:"1px solid rgba(255,255,255,0.08)",borderRadius:20,padding:"4px 10px 4px 6px"}}>
@@ -573,7 +688,6 @@ export default function App() {
         </div>
       </nav>
 
-      {/* Bottom nav mobile */}
       {mob && (
         <div style={{position:"fixed",bottom:0,left:0,right:0,background:"rgba(8,11,14,0.96)",backdropFilter:"blur(12px)",borderTop:"1px solid rgba(255,255,255,0.06)",display:"flex",zIndex:100,paddingBottom:"env(safe-area-inset-bottom,8px)"}}>
           {tabs.map(t=>(
@@ -585,10 +699,10 @@ export default function App() {
         </div>
       )}
 
-      <div style={{...css.main,paddingBottom:mob?"88px":"24px",maxWidth:mob?"100%":"1400px",margin:"0 auto",width:"100%"}}>
+      <div style={{...css.main,paddingBottom:mob?"88px":"24px",maxWidth:"1400px",margin:"0 auto",width:"100%"}}>
         {page==="dashboard"   && <DashboardPage transacoes={transacoes} groqKey={groqKey} mob={mob}/>}
-        {page==="lancamentos" && <LancamentosPage transacoes={transacoes} userId={user.uid} mob={mob}/>}
-        {page==="alertas"     && <AlertasPage transacoes={transacoes} mob={mob}/>}
+        {page==="lancamentos" && <LancamentosPage transacoes={transacoes} userId={user.uid} mob={mob} limites={limites}/>}
+        {page==="alertas"     && <AlertasPage transacoes={transacoes} mob={mob} limites={limites} onSaveLimites={saveLimites}/>}
         {page==="config"      && (
           <div>
             <div style={{fontSize:18,fontWeight:800,marginBottom:4}}>Configurações</div>
